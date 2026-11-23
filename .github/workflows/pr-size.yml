@@ -1,0 +1,45 @@
+# Проверка размера pull request; это не техническое ревью.
+# Эталон лежит в strizh-infra/workflow-templates/pr-size.yml и копируется без изменений
+# в .github/workflows/ каждого репозитория strizhMvp; правится сначала эталон.
+name: PR size
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  # Правила малых PR (CONTRIBUTING организации): ориентир и жёсткий предел изменённых строк
+  # без lock-файлов; метка large-pr снимает предел для согласованных исключений.
+  PR_SOFT_LIMIT: 400
+  PR_HARD_LIMIT: 800
+
+jobs:
+  size:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Count changed lines
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          LARGE_OK: ${{ contains(github.event.pull_request.labels.*.name, 'large-pr') }}
+        run: |
+          lines=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json files --jq '
+            [.files[] | select(.path | test("(^|/)(package-lock[.]json|pnpm-lock[.]yaml|yarn[.]lock|uv[.]lock|poetry[.]lock)$") | not)
+             | .additions + .deletions] | add // 0')
+          echo "Изменено строк без lock-файлов: $lines (ориентир $PR_SOFT_LIMIT, предел $PR_HARD_LIMIT)"
+          if [ "$lines" -gt "$PR_HARD_LIMIT" ]; then
+            if [ "$LARGE_OK" = "true" ]; then
+              echo "::warning::PR на $lines строк, предел снят меткой large-pr"
+              exit 0
+            fi
+            echo "::error::PR на $lines строк больше предела $PR_HARD_LIMIT. Разрежьте на несколько PR или согласуйте метку large-pr."
+            exit 1
+          fi
+          if [ "$lines" -gt "$PR_SOFT_LIMIT" ]; then
+            echo "::warning::PR на $lines строк больше ориентира $PR_SOFT_LIMIT — подумайте, можно ли разрезать"
+          fi
